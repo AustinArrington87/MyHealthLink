@@ -20,25 +20,45 @@ def analyze_health_records(file_paths):
 
     # Upload files to OpenAI
     uploaded_files = []
+    image_files = []
     for file_path in file_paths:
         with open(file_path, "rb") as f:
-            upload_response = openai.files.create(purpose="assistants", file=f)
-            uploaded_files.append(upload_response.id)
+            is_image = file_path.endswith(('.png', '.jpg', '.jpeg'))
+            upload_response = openai.files.create(
+                purpose="vision" if is_image else "assistants",
+                file=f
+            )
+            if is_image:
+                image_files.append(upload_response.id)  # Separate storage for images
+            else:
+                uploaded_files.append({"id": upload_response.id, "type": "file_search"})
     
-    print(f"Uploaded files: {uploaded_files}")
+    print(f"Uploaded files: {uploaded_files}, Image Files: {image_files}")
 
     # Create a new thread
     thread = openai.beta.threads.create()
 
-    # Attach files when creating the user message
+    # Attach PDFs with correct tools (file_search)
+    attachments = [{"file_id": file["id"], "tools": [{"type": "file_search"}]} for file in uploaded_files]
+
+    # Create a message (text + images directly in content)
+    message_content = [
+        {"type": "text", "text": prompt}
+    ]
+
+    # Add images to message content (not as attachments)
+    for img_id in image_files:
+        message_content.append({"type": "image_file", "image_file": {"file_id": img_id}})
+
+    # Add user message
     openai.beta.threads.messages.create(
         thread_id=thread.id,
         role="user",
-        content=prompt,
-        attachments=[{"file_id": file_id, "tools": [{"type": "file_search"}]} for file_id in uploaded_files]  # ✅ Correct format
+        content=message_content,
+        attachments=attachments
     )
 
-    # Run the assistant (without file_ids)
+    # Run the assistant
     assistant_id = "asst_1pBzntEcrVPWsbztmDtG9Hap"  # Use your actual OpenAI Assistant ID
     run = openai.beta.threads.runs.create(
         thread_id=thread.id,
@@ -55,11 +75,19 @@ def analyze_health_records(file_paths):
 
     # Retrieve the final analysis result
     messages = openai.beta.threads.messages.list(thread_id=thread.id)
-    latest_message = messages.data[0].content if messages.data else "No response received."
-
-    return latest_message
+    
+    if messages.data:
+        latest_message = messages.data[0].content
+        print("\nAnalysis Result:\n", latest_message)
+        return latest_message
+    else:
+        print("\n❌ No valid response received. Check if the PDF contains selectable text.")
+        return "No response received."
 
 if __name__ == "__main__":
-    file_paths = ["Medications.png"]  # Replace with actual file paths
+    file_paths = [
+        "Medications.png",
+        "Heme_Profile.pdf"
+    ]  
     result = analyze_health_records(file_paths)
-    print("\nAnalysis Result:\n", result)
+    print("\nFinal Output:\n", result)
