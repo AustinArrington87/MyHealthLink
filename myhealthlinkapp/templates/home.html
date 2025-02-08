@@ -3,7 +3,18 @@
 {% block title %}Home{% endblock %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto">
+<div class="fixed top-0 left-0 right-0 bg-white z-50 border-b border-gray-100">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
+        <a href="{{ url_for('home') }}">
+            <img src="{{ url_for('static', filename='img/MHL_logo.png') }}" 
+                 alt="MyHealthLink Logo" 
+                 class="h-8 drop-shadow-md hover:drop-shadow-lg transition-all duration-300">
+        </a>
+        <a href="{{ url_for('profile') }}" class="text-gray-600 hover:text-gray-900 transition-colors duration-200">Profile</a>
+    </div>
+</div>
+
+<div class="max-w-4xl mx-auto mt-20">
     <h1 class="text-3xl font-bold mb-8">Welcome, Michelle G</h1>
     
     <div class="bg-white shadow-md rounded-lg p-6 mb-6">
@@ -260,6 +271,16 @@
     
     .duration-500 {
         transition-duration: 500ms;
+    }
+    
+    .drop-shadow-md {
+        filter: drop-shadow(0 4px 3px rgb(0 0 0 / 0.07)) 
+                drop-shadow(0 2px 2px rgb(0 0 0 / 0.06));
+    }
+    
+    .drop-shadow-lg {
+        filter: drop-shadow(0 10px 8px rgb(0 0 0 / 0.04)) 
+                drop-shadow(0 4px 3px rgb(0 0 0 / 0.1));
     }
 </style>
 {% endblock %}
