@@ -3,11 +3,9 @@
 {% block title %}Home{% endblock %}
 
 {% block content %}
-<!-- Main Content -->
 <div class="max-w-4xl mx-auto">
     <h1 class="text-3xl font-bold mb-8">Welcome, Michelle G</h1>
     
-    <!-- Upload Section -->
     <div class="bg-white shadow-md rounded-lg p-6 mb-6">
         <h2 class="text-xl font-semibold mb-4">Analyze Health Record</h2>
         <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center" id="dropZone">
@@ -19,23 +17,22 @@
         </div>
     </div>
 
-    <!-- Analysis Results Section -->
     <div id="analysisResult" class="bg-white shadow-md rounded-lg p-6 mb-6 hidden">
         <h2 class="text-xl font-semibold mb-4">Analysis Results</h2>
         <div class="space-y-4">
             <div>
-                <h3 class="font-medium">Synopsis</h3>
-                <p id="synopsis" class="text-gray-700"></p>
-            </div>
-            <div id="insightsSection" class="hidden">
-                <h3 class="font-medium">Insights</h3>
-                <p id="insights" class="text-gray-700"></p>
+                <h3 class="font-medium mb-2">Synopsis</h3>
+                <p id="synopsis" class="text-gray-700 whitespace-pre-line"></p>
             </div>
             <div>
-                <h3 class="font-medium">Anomalies</h3>
-                <p id="anomalies" class="text-gray-700"></p>
+                <h3 class="font-medium mb-2">Insights and Anomalies</h3>
+                <p id="insights-anomalies" class="text-gray-700 whitespace-pre-line"></p>
             </div>
-            <div class="flex space-x-4">
+            <div id="citationsSection" class="hidden">
+                <h3 class="font-medium mb-2">Citations</h3>
+                <p id="citations" class="text-gray-700 whitespace-pre-line"></p>
+            </div>
+            <div class="flex space-x-4 mt-6">
                 <button class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600" onclick="saveAnalysis()">
                     Save
                 </button>
@@ -46,7 +43,6 @@
         </div>
     </div>
 
-    <!-- History Section -->
     <div class="bg-white shadow-md rounded-lg p-6">
         <h2 class="text-xl font-semibold mb-4">My Analysis History</h2>
         <div id="analysisHistory" class="space-y-4">
@@ -55,13 +51,10 @@
     </div>
 </div>
 
-<!-- JavaScript -->
 <script>
-    // Initialize elements
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
 
-    // Drag and drop handlers
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
         dropZone.classList.add('border-blue-500');
@@ -116,25 +109,44 @@
         
         try {
             if (data && data.result) {
+                // Show synopsis
                 document.getElementById('synopsis').textContent = 
                     data.result.synopsis || 'No synopsis available';
                 
-                const insightsSection = document.getElementById('insightsSection');
-                if (data.result.insights) {
-                    document.getElementById('insights').textContent = data.result.insights;
-                    insightsSection.classList.remove('hidden');
+                // Show insights and anomalies
+                const insightsAnomalies = data.result.insights_anomalies;
+                if (insightsAnomalies && insightsAnomalies !== 'No findings to report.') {
+                    // Split on line breaks and handle numbering
+                    const lines = insightsAnomalies
+                        .split('\n')
+                        .map(line => line.trim())
+                        .filter(line => line.length > 0)
+                        .join('\n');
+                    
+                    document.getElementById('insights-anomalies').textContent = lines;
                 } else {
-                    insightsSection.classList.add('hidden');
+                    document.getElementById('insights-anomalies').textContent = 
+                        'No significant findings to report.';
                 }
                 
-                document.getElementById('anomalies').textContent = 
-                    data.result.anomalies || 'No anomalies detected';
+                // Handle citations
+                const citationsSection = document.getElementById('citationsSection');
+                const citations = data.result.citations;
+                
+                if (citations && citations !== 'No Citations available.') {
+                    document.getElementById('citations').textContent = citations;
+                    citationsSection.classList.remove('hidden');
+                } else {
+                    citationsSection.classList.add('hidden');
+                }
             } else {
                 throw new Error('Invalid data format');
             }
         } catch (error) {
             console.error('Error processing results:', error);
-            resultDiv.classList.add('hidden');
+            document.getElementById('synopsis').textContent = 'Error processing analysis';
+            document.getElementById('insights-anomalies').textContent = 'Error processing analysis';
+            citationsSection.classList.add('hidden');
         }
     }
 
@@ -146,6 +158,8 @@
             </button>
             <p class="text-gray-500 mt-2">or drag and drop files here</p>
         `;
+        
+        // Reattach event listener to new file input
         const newFileInput = document.getElementById('fileInput');
         newFileInput.addEventListener('change', (e) => handleFiles(e.target.files));
     }
