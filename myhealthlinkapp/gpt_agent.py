@@ -2,8 +2,8 @@ import openai
 import time
 
 # OpenAI API Credentials
-openai.api_key = ""
-openai.organization = ""
+openai.api_key = "EnterKey"
+openai.organization = "EnterKey"
 
 def extract_section(text, section_name):
     """
