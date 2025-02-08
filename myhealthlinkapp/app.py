@@ -50,15 +50,15 @@ def upload_file():
                     session['last_analysis'] = {
                         'timestamp': datetime.now().isoformat(),
                         'synopsis': result.get('synopsis', 'No synopsis available'),
-                        'insights': result.get('insights', 'No insights available'),
-                        'anomalies': result.get('anomalies', 'No anomalies detected')
+                        'insights_anomalies': result.get('insights_anomalies', 'No insights available'),
+                        'citations': result.get('citations', 'No citations available')
                     }
                     return jsonify({
                         'success': True,
                         'result': {
                             'synopsis': result.get('synopsis', 'No synopsis available'),
-                            'insights': result.get('insights', 'No insights available'),
-                            'anomalies': result.get('anomalies', 'No anomalies detected')
+                            'insights_anomalies': result.get('insights_anomalies', 'No insights available'),
+                            'citations': result.get('citations', 'No citations available')
                         }
                     })
                 else:
