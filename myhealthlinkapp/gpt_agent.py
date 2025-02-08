@@ -14,86 +14,105 @@ def extract_section(text, section_name):
         # Common section markers that might appear in different types of analyses
         markers = {
             "Synopsis": [
-                "Based on", "Synopsis:", "Summary:", "### Summary:",
-                "### Overview:", "Overview:", "Analysis:", "### Analysis:",
-                "Results:", "### Results:", "Findings:", "### Findings:"
+                "### Synopsis", "## Synopsis", "Synopsis:", "Summary:", 
+                "### Summary:", "## Summary", "### Overview:", "## Overview",
+                "Overview:", "Analysis:", "### Analysis:", "## Analysis"
             ],
-            "Anomalies": [
-                "### Insights/Anomalies:", "Anomalies:", "### Anomalies:", 
-                "Insights/Anomalies:", "### Findings of Interest:", 
-                "### Areas of Concern:", "### Abnormal Results:",
-                "### Notable Results:", "### Observations:", "### Key Points:",
-                "### Important Findings:"
+            "Insights and Anomalies": [
+                "### Insights and Anomalies", "## Insights and Anomalies",
+                "Insights and Anomalies:", "### Insights:", "## Insights",
+                "Insights or Anomalies:", "**Insights and Anomalies:**",
+                "## Insights and Anomalies", "**Insights or Anomalies:**"
+            ],
+            "Citations": [
+                "### Citations", "## Citations", "Citations:", 
+                "References:", "### References:", "## References",
+                "Research Citations:", "### Research Citations:",
+                "**Citations:**"
             ]
         }
         
         current_markers = markers.get(section_name, [])
         section_text = ""
         
-        # First try to find specific section markers
+        # Try to find the section and its content
         for marker in current_markers:
             if marker in text:
                 start = text.find(marker) + len(marker)
-                # Look for any of the next section markers
-                all_possible_markers = sum(markers.values(), [])  # Combine all markers
-                ends = [text.find(m, start) for m in all_possible_markers if text.find(m, start) != -1]
-                # Also look for common endpoint markers
-                common_endings = ["This summary", "In conclusion", "Please note", "Note:"]
-                ends.extend([text.find(m, start) for m in common_endings if text.find(m, start) != -1])
-                end = min(ends) if ends else len(text)
+                # Look for the next section marker
+                next_markers = []
+                for m_list in markers.values():
+                    next_markers.extend(m_list)
+                ends = []
+                for next_marker in next_markers:
+                    pos = text.find(next_marker, start)
+                    if pos != -1:
+                        ends.append(pos)
+                if ends:
+                    end = min(ends)
+                else:
+                    # Look for common ending phrases
+                    ending_phrases = ["These citations", "This summary", "In conclusion"]
+                    end_positions = [text.find(phrase, start) for phrase in ending_phrases]
+                    end_positions = [pos for pos in end_positions if pos != -1]
+                    end = min(end_positions) if end_positions else len(text)
+                
                 section_text = text[start:end].strip()
                 break
         
-        # If no section was found with markers, try to intelligently split the content
-        if not section_text:
-            # For synopsis, take the first major section if it exists
-            if section_name == "Synopsis":
-                # Look for the first major section break
-                for marker in markers["Anomalies"]:
-                    index = text.find(marker)
-                    if index != -1:
-                        section_text = text[:index].strip()
-                        break
-                if not section_text:
-                    # If no section break found, take the first part of the text
-                    section_text = text.split('\n\n')[0].strip()
-            
-            # For anomalies/insights, take the latter part if it contains relevant keywords
-            elif section_name == "Anomalies":
-                relevant_keywords = ["note", "concern", "abnormal", "elevated", "decreased", 
-                                  "high", "low", "irregular", "unusual", "attention",
-                                  "significant", "important", "notable", "finding"]
-                
-                # Split text into paragraphs
-                paragraphs = text.split('\n\n')
-                relevant_paragraphs = []
-                
-                # Collect paragraphs that contain relevant keywords
-                for para in paragraphs[1:]:  # Skip the first paragraph (likely synopsis)
-                    if any(keyword in para.lower() for keyword in relevant_keywords):
-                        relevant_paragraphs.append(para)
-                
-                if relevant_paragraphs:
-                    section_text = '\n\n'.join(relevant_paragraphs)
-        
-        # Clean up the extracted text
+        if not section_text and section_name == "Insights and Anomalies":
+            # Try to find insights section by looking for numbered points
+            lines = text.split('\n')
+            in_insights = False
+            insights_lines = []
+            for line in lines:
+                if any(marker in line for marker in current_markers):
+                    in_insights = True
+                    continue
+                if in_insights and line.strip() and not line.startswith('###') and not line.startswith('##'):
+                    insights_lines.append(line.strip())
+            if insights_lines:
+                section_text = '\n'.join(insights_lines)
+
         def clean_text(text):
+            if not text:
+                return ""
+            
             # Remove markdown formatting
             text = text.replace('**', '')
             text = text.replace('###', '')
-            # Remove excessive whitespace
-            text = ' '.join(text.split())
-            # Remove list markers at the start of lines
-            text = text.replace('\n- ', '\n')
-            text = text.replace('\n* ', '\n')
-            text = text.replace('\n1. ', '\n')
+            text = text.replace('##', '')
+            
+            # Split into lines and process each line
+            lines = text.split('\n')
+            cleaned_lines = []
+            for line in lines:
+                # Handle numbered points
+                if line.strip().startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.')):
+                    line = line.split('.', 1)[1] if '.' in line else line
+                if line.strip():  # Only add non-empty lines
+                    cleaned_lines.append(line.strip())
+            
+            # Join lines back together, preserving paragraph structure
+            text = '\n\n'.join(cleaned_lines)
             return text.strip()
         
-        return clean_text(section_text) if section_text else f"No {section_name.lower()} available."
+        cleaned_text = clean_text(section_text)
+        if not cleaned_text:
+            if section_name == "Synopsis":
+                return "No synopsis available."
+            elif section_name == "Insights and Anomalies":
+                return "No significant findings to report."
+            elif section_name == "Citations":
+                return "No citations provided."
+            else:
+                return "No content available."
+        
+        return cleaned_text
         
     except Exception as e:
         print(f"Error extracting {section_name}: {e}")
-        return "Analysis available. Please refer to the full text for details."
+        return f"Error processing {section_name} section"
 
 def analyze_health_records(file_paths):
     """
@@ -101,10 +120,20 @@ def analyze_health_records(file_paths):
     """
     # Determine if single or multi-file analysis
     prompt = (
-        "Analyze these health records and provide a synopsis, any insights or anomalies "
-        "(explore if insights occur through cross-analysis of the documents)."
+        "Analyze these health records and provide: \n"
+        "1. A detailed synopsis\n"
+        "2. Insights and anomalies with clinical significance\n"
+        "3. Relevant research citations that support the key insights\n\n"
+        "Format the response with clear sections for Synopsis, Insights and Anomalies, and Citations. "
+        "For citations, include recent peer-reviewed research that supports the clinical insights provided. "
+        "If analyzing multiple documents, include cross-document insights."
         if len(file_paths) > 1
-        else "Analyze this health record and provide a synopsis, any insights or anomalies."
+        else "Analyze this health record and provide: \n"
+        "1. A detailed synopsis\n"
+        "2. Insights and anomalies with clinical significance\n"
+        "3. Relevant research citations that support the key insights\n\n"
+        "Format the response with clear sections for Synopsis, Insights and Anomalies, and Citations. "
+        "For citations, include recent peer-reviewed research that supports the clinical insights provided."
     )
 
     # Upload files to OpenAI
@@ -135,7 +164,7 @@ def analyze_health_records(file_paths):
         {"type": "text", "text": prompt}
     ]
 
-    # Add images to message content (not as attachments)
+    # Add images to message content
     for img_id in image_files:
         message_content.append({"type": "image_file", "image_file": {"file_id": img_id}})
 
@@ -186,14 +215,16 @@ def analyze_health_records(file_paths):
 
         # Parse the analysis into sections
         synopsis = extract_section(analysis_text, "Synopsis")
-        anomalies = extract_section(analysis_text, "Anomalies")
+        insights_anomalies = extract_section(analysis_text, "Insights and Anomalies")
+        citations = extract_section(analysis_text, "Citations")
 
-        # Create a more resilient response structure
+        # Create the response structure
         analysis_result = {
             'success': True,
             'result': {
                 'synopsis': synopsis,
-                'anomalies': anomalies,
+                'insights_anomalies': insights_anomalies,
+                'citations': citations,
                 'raw_text': analysis_text  # Include raw text as fallback
             }
         }
