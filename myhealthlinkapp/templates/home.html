@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block title %}Home{% endblock %}
+
+{% block content %}
+<!-- Main Content -->
+<div class="max-w-4xl mx-auto">
+    <h1 class="text-3xl font-bold mb-8">Welcome, Michelle G</h1>
+    
+    <!-- Upload Section -->
+    <div class="bg-white shadow-md rounded-lg p-6 mb-6">
+        <h2 class="text-xl font-semibold mb-4">Analyze Health Record</h2>
+        <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center" id="dropZone">
+            <input type="file" id="fileInput" multiple class="hidden" accept=".pdf,.png,.jpg,.jpeg">
+            <button onclick="document.getElementById('fileInput').click()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                + Add Document
+            </button>
+            <p class="text-gray-500 mt-2">or drag and drop files here</p>
+        </div>
+    </div>
+
+    <!-- Analysis Results Section -->
+    <div id="analysisResult" class="bg-white shadow-md rounded-lg p-6 mb-6 hidden">
+        <h2 class="text-xl font-semibold mb-4">Analysis Results</h2>
+        <div class="space-y-4">
+            <div>
+                <h3 class="font-medium">Synopsis</h3>
+                <p id="synopsis" class="text-gray-700"></p>
+            </div>
+            <div id="insightsSection" class="hidden">
+                <h3 class="font-medium">Insights</h3>
+                <p id="insights" class="text-gray-700"></p>
+            </div>
+            <div>
+                <h3 class="font-medium">Anomalies</h3>
+                <p id="anomalies" class="text-gray-700"></p>
+            </div>
+            <div class="flex space-x-4">
+                <button class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600" onclick="saveAnalysis()">
+                    Save
+                </button>
+                <button class="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600" onclick="shareAnalysis()">
+                    Share
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Section -->
+    <div class="bg-white shadow-md rounded-lg p-6">
+        <h2 class="text-xl font-semibold mb-4">My Analysis History</h2>
+        <div id="analysisHistory" class="space-y-4">
+            <!-- Analysis history items will be populated here -->
+        </div>
+    </div>
+</div>
+
+<!-- JavaScript -->
+<script>
+    // Initialize elements
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+
+    // Drag and drop handlers
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('border-blue-500');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('border-blue-500');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-blue-500');
+        handleFiles(e.dataTransfer.files);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+        handleFiles(e.target.files);
+    });
+
+    function handleFiles(files) {
+        const formData = new FormData();
+        for (const file of files) {
+            formData.append('files[]', file);
+        }
+
+        // Show loading state
+        dropZone.innerHTML = '<p class="text-gray-500">Analyzing files...</p>';
+
+        fetch('/upload', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            resetUploadArea();
+            if (data && data.success) {
+                showAnalysisResult(data);
+            } else {
+                throw new Error(data.error || 'Analysis failed');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            resetUploadArea();
+            alert('An error occurred while analyzing the files. Please try again.');
+        });
+    }
+
+    function showAnalysisResult(data) {
+        const resultDiv = document.getElementById('analysisResult');
+        resultDiv.classList.remove('hidden');
+        
+        try {
+            if (data && data.result) {
+                document.getElementById('synopsis').textContent = 
+                    data.result.synopsis || 'No synopsis available';
+                
+                const insightsSection = document.getElementById('insightsSection');
+                if (data.result.insights) {
+                    document.getElementById('insights').textContent = data.result.insights;
+                    insightsSection.classList.remove('hidden');
+                } else {
+                    insightsSection.classList.add('hidden');
+                }
+                
+                document.getElementById('anomalies').textContent = 
+                    data.result.anomalies || 'No anomalies detected';
+            } else {
+                throw new Error('Invalid data format');
+            }
+        } catch (error) {
+            console.error('Error processing results:', error);
+            resultDiv.classList.add('hidden');
+        }
+    }
+
+    function resetUploadArea() {
+        dropZone.innerHTML = `
+            <input type="file" id="fileInput" multiple class="hidden" accept=".pdf,.png,.jpg,.jpeg">
+            <button onclick="document.getElementById('fileInput').click()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                + Add Document
+            </button>
+            <p class="text-gray-500 mt-2">or drag and drop files here</p>
+        `;
+        const newFileInput = document.getElementById('fileInput');
+        newFileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+    }
+
+    function saveAnalysis() {
+        alert('Analysis saved successfully!');
+    }
+
+    function shareAnalysis() {
+        alert('Share feature coming soon!');
+    }
+</script>
+{% endblock %}
