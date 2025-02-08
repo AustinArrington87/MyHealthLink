@@ -115,25 +115,14 @@
                 
                 // Show insights and anomalies
                 const insightsAnomalies = data.result.insights_anomalies;
-                if (insightsAnomalies && insightsAnomalies !== 'No findings to report.') {
-                    // Split on line breaks and handle numbering
-                    const lines = insightsAnomalies
-                        .split('\n')
-                        .map(line => line.trim())
-                        .filter(line => line.length > 0)
-                        .join('\n');
-                    
-                    document.getElementById('insights-anomalies').textContent = lines;
-                } else {
-                    document.getElementById('insights-anomalies').textContent = 
-                        'No significant findings to report.';
-                }
+                document.getElementById('insights-anomalies').textContent = 
+                    insightsAnomalies || 'No significant findings to report.';
                 
                 // Handle citations
                 const citationsSection = document.getElementById('citationsSection');
                 const citations = data.result.citations;
                 
-                if (citations && citations !== 'No Citations available.') {
+                if (citations && citations !== 'No citations available') {
                     document.getElementById('citations').textContent = citations;
                     citationsSection.classList.remove('hidden');
                 } else {
