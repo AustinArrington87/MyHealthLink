@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Profile{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <h1 class="text-3xl font-bold mb-8">Profile</h1>
+    
+    <div class="bg-white shadow-md rounded-lg p-6">
+        <h2 class="text-xl font-semibold mb-4">Contact Info</h2>
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-gray-700 text-sm font-bold mb-2">First Name</label>
+                <input type="text" value="{{ user.name.split()[0] }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+            </div>
+            <div>
+                <label class="block text-gray-700 text-sm font-bold mb-2">Last Name</label>
+                <input type="text" value="{{ user.name.split()[1] }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-white shadow-md rounded-lg p-6 mt-6">
+        <h2 class="text-xl font-semibold mb-4">Vitals</h2>
+        <p class="text-gray-600 mb-4">Adding your vitals is optional but can help with analysis.</p>
+        
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-gray-700 text-sm font-bold mb-2">Blood Pressure</label>
+                <input type="text" value="{{ user.vitals.blood_pressure }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+            </div>
+            <div>
+                <label class="block text-gray-700 text-sm font-bold mb-2">BMI</label>
+                <input type="text" value="{{ user.vitals.bmi }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+            </div>
+            <div>
+                <label class="block text-gray-700 text-sm font-bold mb-2">Height</label>
+                <input type="text" value="{{ user.vitals.height }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+            </div>
+            <div>
+                <label class="block text-gray-700 text-sm font-bold mb-2">Weight</label>
+                <input type="text" value="{{ user.vitals.weight }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+            </div>
+        </div>
+
+        <div class="mt-6">
+            <button class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                Save
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
