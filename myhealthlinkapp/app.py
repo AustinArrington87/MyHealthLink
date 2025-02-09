@@ -1,314 +1,188 @@
-{% extends "base.html" %}
+from flask import Flask, render_template, request, jsonify, session, url_for, send_file
+from werkzeug.utils import secure_filename
+import os
+from datetime import datetime
+from gpt_agent import analyze_health_records  # Import your existing analysis function
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from io import BytesIO
+from config import default_config
+import logging
 
-{% block title %}Home{% endblock %}
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('HealthAnalysisApp')
 
-{% block content %}
-<div class="fixed top-0 left-0 right-0 bg-white z-50 border-b border-gray-100">
-    <div class="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
-        <a href="{{ url_for('home') }}">
-            <img src="{{ url_for('static', filename='img/MHL_logo.png') }}" 
-                 alt="MyHealthLink Logo" 
-                 class="h-8 drop-shadow-md hover:drop-shadow-lg transition-all duration-300">
-        </a>
-        <a href="{{ url_for('profile') }}" class="text-gray-600 hover:text-gray-900 transition-colors duration-200">Profile</a>
-    </div>
-</div>
+app = Flask(__name__)
+app.secret_key = 'dev-secret-key-123'  # Required for session management
 
-<div class="max-w-4xl mx-auto mt-20">
-    <h1 class="text-3xl font-bold mb-8">Welcome, Michelle G</h1>
+# Configure upload folder
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Ensure upload directory exists
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/')
+def home():
+    return render_template('home.html')
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'files[]' not in request.files:
+        return jsonify({'success': False, 'error': 'No file part'}), 400
     
-    <div class="bg-white shadow-md rounded-lg p-6 mb-6">
-        <h2 class="text-xl font-semibold mb-4">Analyze Health Record</h2>
-        <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center" id="dropZone">
-            <input type="file" id="fileInput" multiple class="hidden" accept=".pdf,.png,.jpg,.jpeg">
-            <button onclick="document.getElementById('fileInput').click()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
-                + Add Document
-            </button>
-            <p class="text-gray-500 mt-2">or drag and drop files here</p>
-        </div>
-    </div>
-
-    <div id="analysisResult" class="bg-white shadow-md rounded-lg p-6 mb-6 hidden">
-        <h2 class="text-xl font-semibold mb-4">Analysis Results</h2>
-        <div class="space-y-6">
-            <div>
-                <h3 class="font-medium mb-3">Synopsis</h3>
-                <p id="synopsis" class="text-gray-700 whitespace-pre-line leading-relaxed"></p>
-            </div>
-            <div>
-                <h3 class="font-medium mb-3">Insights and Anomalies</h3>
-                <div class="bg-white rounded-lg">
-                    <p id="insights-anomalies" class="text-gray-700 whitespace-pre-line leading-relaxed"></p>
-                </div>
-            </div>
-            <div id="citationsSection" class="hidden">
-                <h3 class="font-medium mb-3">Citations</h3>
-                <div class="bg-gray-50 border-l-4 border-blue-500 p-4 rounded-r-lg">
-                    <div class="flex items-start">
-                        <div class="flex-shrink-0 mt-1">
-                            <svg class="h-5 w-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                            </svg>
-                        </div>
-                        <div id="citations" class="ml-3 text-gray-700 whitespace-pre-line text-sm leading-relaxed"></div>
-                    </div>
-                </div>
-            </div>
-            <div class="flex space-x-4 mt-6">
-                <button class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600" onclick="exportToPDF()">
-                    Save as PDF
-                </button>
-                <button class="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600" onclick="shareAnalysis()">
-                    Share
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <div class="bg-white shadow-md rounded-lg p-6">
-        <h2 class="text-xl font-semibold mb-4">My Analysis History</h2>
-        <div id="analysisHistory" class="space-y-4">
-            <!-- Analysis history items will be populated here -->
-        </div>
-    </div>
-</div>
-
-<div id="loadingState" class="hidden">
-    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div class="bg-white p-8 rounded-lg shadow-xl max-w-md w-full mx-4">
-            <div class="flex items-center justify-center mb-4">
-                <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-            </div>
-            
-            <div class="text-center">
-                <h3 class="text-lg font-semibold mb-2">AI Analysis in Progress</h3>
-                <p id="loadingQuote" class="text-gray-600 transition-opacity duration-500"></p>
-                <p id="almostReady" class="text-gray-600 hidden transition-opacity duration-500">
-                    Your results are almost ready...
-                </p>
-                <div class="mt-4 flex justify-center space-x-2">
-                    <span class="animate-pulse delay-100 text-blue-500">●</span>
-                    <span class="animate-pulse delay-200 text-blue-500">●</span>
-                    <span class="animate-pulse delay-300 text-blue-500">●</span>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<script src="/static/js/quotes.js"></script>
-
-<script>
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
-
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.classList.add('border-blue-500');
-    });
-
-    dropZone.addEventListener('dragleave', () => {
-        dropZone.classList.remove('border-blue-500');
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('border-blue-500');
-        handleFiles(e.dataTransfer.files);
-    });
-
-    fileInput.addEventListener('change', (e) => {
-        handleFiles(e.target.files);
-    });
-
-    function handleFiles(files) {
-        const formData = new FormData();
-        for (const file of files) {
-            formData.append('files[]', file);
-        }
-
-        // Show loading state
-        const loadingState = document.getElementById('loadingState');
-        const loadingQuote = document.getElementById('loadingQuote');
-        const almostReady = document.getElementById('almostReady');
-        loadingState.classList.remove('hidden');
+    files = request.files.getlist('files[]')
+    file_paths = []
+    
+    try:
+        for file in files:
+            if file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                safe_filename = f"{timestamp}_{filename}"
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], safe_filename)
+                file.save(filepath)
+                file_paths.append(filepath)
         
-        // Get a random quote
-        const randomQuote = wellnessQuotes[Math.floor(Math.random() * wellnessQuotes.length)];
-        loadingQuote.textContent = randomQuote;
-        
-        // After 4 seconds, transition to "almost ready" message
-        setTimeout(() => {
-            loadingQuote.classList.add('opacity-0');
-            setTimeout(() => {
-                loadingQuote.classList.add('hidden');
-                almostReady.classList.remove('hidden');
-                setTimeout(() => {
-                    almostReady.classList.remove('opacity-0');
-                }, 50);
-            }, 500);
-        }, 4000);
+        if file_paths:
+            try:
+                # Use the default configuration when calling analyze_health_records
+                analysis_result = analyze_health_records(file_paths, config=default_config)
+                
+                if analysis_result.get('success'):
+                    result = analysis_result.get('result', {})
+                    session['last_analysis'] = {
+                        'timestamp': datetime.now().isoformat(),
+                        'synopsis': result.get('synopsis', 'No synopsis available'),
+                        'insights_anomalies': result.get('insights_anomalies', 'No insights available'),
+                        'citations': result.get('citations', 'No citations available')
+                    }
+                    return jsonify({
+                        'success': True,
+                        'result': {
+                            'synopsis': result.get('synopsis', 'No synopsis available'),
+                            'insights_anomalies': result.get('insights_anomalies', 'No insights available'),
+                            'citations': result.get('citations', 'No citations available')
+                        }
+                    })
+                else:
+                    raise Exception(analysis_result.get('error', 'Analysis failed'))
 
-        fetch('/upload', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.json())
-        .then(data => {
-            loadingState.classList.add('hidden');
-            // Reset the loading state elements for next time
-            loadingQuote.classList.remove('hidden', 'opacity-0');
-            almostReady.classList.add('hidden', 'opacity-0');
+            except Exception as e:
+                logger.error(f"Analysis error: {str(e)}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+        else:
+            return jsonify({'success': False, 'error': 'No valid files uploaded'}), 400
             
-            resetUploadArea();
-            if (data && data.success) {
-                showAnalysisResult(data);
-            } else {
-                throw new Error(data.error || 'Analysis failed');
-            }
-        })
-        .catch(error => {
-            loadingState.classList.add('hidden');
-            // Reset the loading state elements for next time
-            loadingQuote.classList.remove('hidden', 'opacity-0');
-            almostReady.classList.add('hidden', 'opacity-0');
-            
-            console.error('Error:', error);
-            resetUploadArea();
-            alert('An error occurred while analyzing the files. Please try again.');
-        });
-    }
+    except Exception as e:
+        logger.error(f"Upload error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    
+    finally:
+        # Clean up uploaded files
+        for filepath in file_paths:
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except Exception as e:
+                logger.error(f"Error cleaning up file {filepath}: {str(e)}")
 
-    function showAnalysisResult(data) {
-        const resultDiv = document.getElementById('analysisResult');
-        resultDiv.classList.remove('hidden');
-        
-        try {
-            if (data && data.result) {
-                // Show synopsis
-                document.getElementById('synopsis').textContent = 
-                    data.result.synopsis || 'No synopsis available';
-                
-                // Show insights and anomalies
-                const insightsAnomalies = data.result.insights_anomalies;
-                document.getElementById('insights-anomalies').textContent = 
-                    insightsAnomalies || 'No significant findings to report.';
-                
-                // Handle citations
-                const citationsSection = document.getElementById('citationsSection');
-                const citations = data.result.citations;
-                
-                if (citations && citations !== 'No citations available') {
-                    document.getElementById('citations').textContent = citations;
-                    citationsSection.classList.remove('hidden');
-                } else {
-                    citationsSection.classList.add('hidden');
-                }
-            } else {
-                throw new Error('Invalid data format');
-            }
-        } catch (error) {
-            console.error('Error processing results:', error);
-            document.getElementById('synopsis').textContent = 'Error processing analysis';
-            document.getElementById('insights-anomalies').textContent = 'Error processing analysis';
-            citationsSection.classList.add('hidden');
+@app.route('/profile')
+def profile():
+    # Mock data for demonstration
+    user_data = {
+        'name': 'Michelle G',
+        'vitals': {
+            'blood_pressure': '120/80',
+            'pulse_rate': '72',
+            'height': "5'10\"",
+            'weight': '150',
+            'bmi': '21.5',
+            'respiratory_rate': '16'
         }
     }
+    return render_template('profile.html', user=user_data)
 
-    function resetUploadArea() {
-        dropZone.innerHTML = `
-            <input type="file" id="fileInput" multiple class="hidden" accept=".pdf,.png,.jpg,.jpeg">
-            <button onclick="document.getElementById('fileInput').click()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
-                + Add Document
-            </button>
-            <p class="text-gray-500 mt-2">or drag and drop files here</p>
-        `;
+@app.route('/export-pdf', methods=['POST'])
+def export_pdf():
+    try:
+        data = request.json
         
-        // Reattach event listener to new file input
-        const newFileInput = document.getElementById('fileInput');
-        newFileInput.addEventListener('change', (e) => handleFiles(e.target.files));
-    }
+        # Create a BytesIO buffer to receive PDF data
+        buffer = BytesIO()
+        
+        # Create the PDF document
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=letter,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=72
+        )
+        
+        # Get styles
+        styles = getSampleStyleSheet()
+        title_style = styles['Heading1']
+        heading_style = styles['Heading2']
+        normal_style = styles['Normal']
+        
+        # Create the document content
+        content = []
+        
+        # Add title
+        content.append(Paragraph("Health Record Analysis", title_style))
+        content.append(Spacer(1, 20))
+        
+        # Add date
+        date_str = datetime.now().strftime("%B %d, %Y")
+        content.append(Paragraph(f"Generated on {date_str}", normal_style))
+        content.append(Spacer(1, 20))
+        
+        # Add synopsis
+        content.append(Paragraph("Synopsis", heading_style))
+        content.append(Paragraph(data.get('synopsis', ''), normal_style))
+        content.append(Spacer(1, 20))
+        
+        # Add insights and anomalies
+        content.append(Paragraph("Insights and Anomalies", heading_style))
+        content.append(Paragraph(data.get('insights_anomalies', ''), normal_style))
+        content.append(Spacer(1, 20))
+        
+        # Add citations if available
+        if data.get('citations'):
+            content.append(Paragraph("Citations", heading_style))
+            content.append(Paragraph(data.get('citations', ''), normal_style))
+        
+        # Build the PDF document
+        doc.build(content)
+        
+        # Move to the beginning of the buffer
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            download_name='health-analysis.pdf',
+            as_attachment=True,
+            mimetype='application/pdf'
+        )
+        
+    except Exception as e:
+        print(f"PDF generation error: {str(e)}")
+        return jsonify({'error': 'Failed to generate PDF'}), 500
 
-    function exportToPDF() {
-        const analysisData = {
-            synopsis: document.getElementById('synopsis').textContent,
-            insights_anomalies: document.getElementById('insights-anomalies').textContent,
-            citations: document.getElementById('citations').textContent
-        };
-
-        fetch('/export-pdf', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(analysisData)
-        })
-        .then(response => response.blob())
-        .then(blob => {
-            // Create a download link and trigger it
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'health-analysis.pdf';
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            a.remove();
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            alert('Failed to generate PDF. Please try again.');
-        });
-    }
-
-    function shareAnalysis() {
-        alert('Share feature coming soon!');
-    }
-</script>
-
-<style>
-    @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
-    }
-    
-    .animate-pulse {
-        animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    }
-    
-    .delay-100 {
-        animation-delay: 0.1s;
-    }
-    
-    .delay-200 {
-        animation-delay: 0.2s;
-    }
-    
-    .delay-300 {
-        animation-delay: 0.3s;
-    }
-    
-    .opacity-0 {
-        opacity: 0;
-    }
-    
-    .transition-opacity {
-        transition-property: opacity;
-        transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-    }
-    
-    .duration-500 {
-        transition-duration: 500ms;
-    }
-    
-    .drop-shadow-md {
-        filter: drop-shadow(0 4px 3px rgb(0 0 0 / 0.07)) 
-                drop-shadow(0 2px 2px rgb(0 0 0 / 0.06));
-    }
-    
-    .drop-shadow-lg {
-        filter: drop-shadow(0 10px 8px rgb(0 0 0 / 0.04)) 
-                drop-shadow(0 4px 3px rgb(0 0 0 / 0.1));
-    }
-</style>
-{% endblock %}
+if __name__ == '__main__':
+    app.run(debug=True)
