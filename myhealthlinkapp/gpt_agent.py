@@ -1,17 +1,195 @@
-import openai
+import pytesseract
+from pdf2image import convert_from_path
+import re
+from PIL import Image, ImageDraw
+import io
+import spacy
+import numpy as np
+import logging
+from typing import List, Dict, Optional, Set, Union
+from dataclasses import dataclass
+from tqdm import tqdm
+import os
+from concurrent.futures import ThreadPoolExecutor
 import time
+from openai import OpenAI
 
-# OpenAI API Credentials
-openai.api_key = "EnterKey"
-openai.organization = "EnterKey"
+# additional installations needed, NLP and OCR 
+# brew install tesseract
+# brew install tesseract-lang
+# python3.11 -m spacy download en_core_web_sm
 
-def extract_section(text, section_name):
-    """
-    Flexible helper function to extract sections from any type of analysis text.
-    Handles various document types (medical records, blood tests, etc.)
-    """
+# Initialize OpenAI client
+client = OpenAI(
+    api_key="EnterKey",
+    organization="EnterKey"
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('HealthRecordAnalyzer')
+
+class PIIScrubber:
+    def __init__(self, config=None):
+        # Load SpaCy model for named entity recognition
+        self.nlp = spacy.load("en_core_web_sm")
+        logger.info("Successfully loaded SpaCy model")
+        
+        # Enhanced PII patterns to catch more variations
+        self.pii_patterns = {
+            'mrn': r'(?:MRN:?\s*|Medical Record Number:?\s*|Record Number:?\s*|#:?\s*)\d{5,}',
+            'dob': r'(?:DOB:?\s*|Date of Birth:?\s*|Birth Date:?\s*|Born:?\s*)\d{1,2}[-/]\d{1,2}[-/]\d{2,4}',
+            'name_pattern': r'(?:Name:?\s*|Patient:?\s*|Dr\.?:?\s*|Doctor:?\s*|PCP:?\s*|Dear\s+|Sincerely,?\s+)[A-Z][a-z]+(?:[-\s][A-Z][a-z]+)*(?:\s*,\s*[A-Z][A-Za-z.]*)?',
+            'simple_name': r'\b[A-Z][a-z]+\s+[A-Z][a-z]+\b',  # Catches standalone full names
+            'provider_name': r'(?:Provider:?\s*|MD:?\s*|DO:?\s*|NP:?\s*|PA:?\s*)[A-Z][a-z]+(?:[-\s][A-Z][a-z]+)*(?:\s*,\s*[A-Z][A-Za-z.]*)?',
+            'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+            'phone': r'(?:\+\d{1,2}\s)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
+            'ssn': r'\b\d{3}[-]?\d{2}[-]?\d{4}\b',
+            'address': r'\d{1,5}\s+[A-Za-z0-9\s.,-]+(?:street|st|avenue|ave|road|rd|highway|hwy|square|sq|trail|trl|drive|dr|court|ct|parkway|pkwy|circle|cir|boulevard|blvd)\b',
+            'provider_id': r'(?:NPI:?\s*|Provider ID:?\s*|License:?\s*)\d{10}',
+            'legal_name': r'Legal Name:?\s*[A-Z][a-z]+(?:[-\s][A-Z][a-z]+)*',
+            # Add these new patterns
+            'capitalized_name': r'\b[A-Z][a-z]+(?:[-\s][A-Z][a-z]+)+\b',  # Catches names like "Austin Arrington"
+            'heme_profile': r'(?:Profile for|Results for|Patient:|Name:)\s*[A-Z][a-z]+(?:[-\s][A-Z][a-z]+)*',
+            'doctor_full': r'(?:Dr\.|Doctor)\s+[A-Z][a-z]+(?:[-\s][A-Z][a-z]+)*'
+        }
+        self.config = config
+
+    def _text_to_image_coords(self, start_char: int, end_char: int, text: str, image_shape: tuple) -> tuple:
+        """Convert text position to approximate image coordinates"""
+        height, width = image_shape[:2]
+        
+        # Calculate relative position in document
+        total_chars = len(text)
+        relative_start = start_char / total_chars
+        relative_end = end_char / total_chars
+        
+        # Calculate vertical position (assume text takes up middle 80% of image)
+        vertical_margin = height * 0.1  # 10% margin top and bottom
+        usable_height = height * 0.8
+        y_position = vertical_margin + (relative_start * usable_height)
+        
+        # Calculate horizontal position (assume text takes up middle 90% of image)
+        horizontal_margin = width * 0.05  # 5% margin left and right
+        usable_width = width * 0.9
+        x_start = horizontal_margin + (relative_start * usable_width)
+        x_end = horizontal_margin + (relative_end * usable_width)
+        
+        # Calculate box dimensions
+        box_height = height * 0.05  # 5% of image height
+        y1 = max(0, y_position - (box_height / 2))
+        y2 = min(height, y_position + (box_height / 2))
+        
+        # Ensure x2 > x1 and coordinates are within bounds
+        x1 = max(0, min(x_start, width - 1))
+        x2 = max(x1 + 1, min(x_end, width))
+        
+        # Convert to integers
+        return (int(x1), int(y1), int(x2), int(y2))
+
+    def detect_pii_regions(self, text: str, image_shape: tuple) -> List[tuple]:
+        """Detect regions containing PII in text"""
+        pii_regions = []
+        entities_found = set()
+        
+        # Use SpaCy for named entity recognition
+        doc = self.nlp(text)
+        for ent in doc.ents:
+            if ent.label_ in ['PERSON', 'ORG', 'GPE', 'LOC']:
+                region = self._text_to_image_coords(ent.start_char, ent.end_char, text, image_shape)
+                pii_regions.append(region)
+                entities_found.add(ent.text)
+        
+        # Use regex patterns to find additional PII
+        for pattern_name, pattern in self.pii_patterns.items():
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in matches:
+                matched_text = match.group()
+                if matched_text not in entities_found:
+                    region = self._text_to_image_coords(match.start(), match.end(), text, image_shape)
+                    pii_regions.append(region)
+                    entities_found.add(matched_text)
+        
+        return self._merge_overlapping_regions(pii_regions)
+
+    def _merge_overlapping_regions(self, regions: List[tuple]) -> List[tuple]:
+        """Merge overlapping redaction regions"""
+        if not regions:
+            return regions
+            
+        regions.sort(key=lambda x: (x[0], x[1]))
+        merged = [regions[0]]
+        
+        for current in regions[1:]:
+            previous = merged[-1]
+            if current[0] <= previous[2]:  # Regions overlap
+                merged[-1] = (
+                    min(previous[0], current[0]),
+                    min(previous[1], current[1]),
+                    max(previous[2], current[2]),
+                    max(previous[3], current[3])
+                )
+            else:
+                merged.append(current)
+        
+        return merged
+
+    def redact_pii(self, file_path: str) -> Optional[io.BytesIO]:
+        """Redact PII from the given file"""
+        try:
+            # Handle both PDF and image files
+            if file_path.lower().endswith('.pdf'):
+                pages = convert_from_path(file_path)
+                image = pages[0]  # Process first page for now
+                logger.info(f"Successfully converted PDF to image: {file_path}")
+            else:
+                image = Image.open(file_path)
+                logger.info(f"Successfully opened image file: {file_path}")
+
+            # Convert to numpy array for processing
+            img_array = np.array(image)
+            
+            # Extract text using OCR
+            text = pytesseract.image_to_string(image)
+            confidence = float(pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME)['conf'].mean())
+            
+            if confidence < 75.0:  # Configurable threshold
+                logger.warning(f"Low OCR confidence: {confidence:.2f}%")
+            
+            # Detect PII regions
+            pii_regions = self.detect_pii_regions(text, img_array.shape)
+            
+            # Create a copy of the image for redaction
+            redacted_image = image.copy()
+            draw = ImageDraw.Draw(redacted_image)
+            
+            # Redact detected regions
+            for region in pii_regions:
+                draw.rectangle(region, fill='black')
+            
+            # Save to bytes buffer with proper filename
+            buffer = io.BytesIO()
+            redacted_image.save(buffer, format='PNG')
+            buffer.seek(0)
+            
+            # Store the original filename for later use
+            filename = os.path.splitext(os.path.basename(file_path))[0] + '.png'
+            buffer.name = filename
+            
+            logger.info(f"Successfully redacted {len(pii_regions)} PII regions in {file_path}")
+            return buffer
+
+        except Exception as e:
+            logger.error(f"Error processing {file_path}: {e}")
+            raise
+
+def extract_section(text: str, section_name: str) -> str:
+    """Extract specific sections from the analysis text"""
     try:
-        # Common section markers that might appear in different types of analyses
+        # Section markers
         markers = {
             "Synopsis": [
                 "### Synopsis", "## Synopsis", "Synopsis:", "Summary:", 
@@ -32,14 +210,14 @@ def extract_section(text, section_name):
             ]
         }
         
+        # Look for section content
         current_markers = markers.get(section_name, [])
         section_text = ""
         
-        # Try to find the section and its content
         for marker in current_markers:
             if marker in text:
                 start = text.find(marker) + len(marker)
-                # Look for the next section marker
+                # Find next section marker
                 next_markers = []
                 for m_list in markers.values():
                     next_markers.extend(m_list)
@@ -48,197 +226,205 @@ def extract_section(text, section_name):
                     pos = text.find(next_marker, start)
                     if pos != -1:
                         ends.append(pos)
+                
                 if ends:
                     end = min(ends)
                 else:
-                    # Look for common ending phrases
-                    ending_phrases = ["These citations", "This summary", "In conclusion"]
-                    end_positions = [text.find(phrase, start) for phrase in ending_phrases]
-                    end_positions = [pos for pos in end_positions if pos != -1]
-                    end = min(end_positions) if end_positions else len(text)
+                    end = len(text)
                 
                 section_text = text[start:end].strip()
                 break
         
-        if not section_text and section_name == "Insights and Anomalies":
-            # Try to find insights section by looking for numbered points
-            lines = text.split('\n')
-            in_insights = False
-            insights_lines = []
-            for line in lines:
-                if any(marker in line for marker in current_markers):
-                    in_insights = True
-                    continue
-                if in_insights and line.strip() and not line.startswith('###') and not line.startswith('##'):
-                    insights_lines.append(line.strip())
-            if insights_lines:
-                section_text = '\n'.join(insights_lines)
-
-        def clean_text(text):
-            if not text:
-                return ""
-            
+        # Clean markdown and other formatting
+        if section_text:
             # Remove markdown formatting
-            text = text.replace('**', '')
-            text = text.replace('###', '')
-            text = text.replace('##', '')
-            
-            # Split into lines and process each line
-            lines = text.split('\n')
-            cleaned_lines = []
-            for line in lines:
-                # Handle numbered points
-                if line.strip().startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.')):
-                    line = line.split('.', 1)[1] if '.' in line else line
-                if line.strip():  # Only add non-empty lines
-                    cleaned_lines.append(line.strip())
-            
-            # Join lines back together, preserving paragraph structure
-            text = '\n\n'.join(cleaned_lines)
-            return text.strip()
+            section_text = re.sub(r'\*\*(.+?)\*\*', r'\1', section_text)  # Bold
+            section_text = re.sub(r'\*(.+?)\*', r'\1', section_text)      # Italic
+            section_text = re.sub(r'_(.+?)_', r'\1', section_text)        # Underscore
+            section_text = re.sub(r'`(.+?)`', r'\1', section_text)        # Code
+            # Remove multiple newlines
+            section_text = re.sub(r'\n\s*\n', '\n', section_text)
+            # Remove leading/trailing whitespace
+            section_text = section_text.strip()
         
-        cleaned_text = clean_text(section_text)
-        if not cleaned_text:
-            if section_name == "Synopsis":
-                return "No synopsis available."
-            elif section_name == "Insights and Anomalies":
-                return "No significant findings to report."
-            elif section_name == "Citations":
-                return "No citations provided."
-            else:
-                return "No content available."
+        if not section_text:
+            return f"No {section_name.lower()} available."
         
-        return cleaned_text
+        return section_text
         
     except Exception as e:
-        print(f"Error extracting {section_name}: {e}")
-        return f"Error processing {section_name} section"
+        logger.error(f"Error extracting {section_name}: {e}")
+        return f"Error processing {section_name.lower()} section"
 
-def analyze_health_records(file_paths):
-    """
-    Sends image/PDF files to OpenAI API for analysis.
-    """
-    # Determine if single or multi-file analysis
-    prompt = (
-        "Analyze these health records and provide: \n"
-        "1. A detailed synopsis\n"
-        "2. Insights and anomalies with clinical significance\n"
-        "3. Relevant research citations that support the key insights\n\n"
-        "Format the response with clear sections for Synopsis, Insights and Anomalies, and Citations. "
-        "For citations, include recent peer-reviewed research that supports the clinical insights provided. "
-        "If analyzing multiple documents, include cross-document insights."
-        if len(file_paths) > 1
-        else "Analyze this health record and provide: \n"
-        "1. A detailed synopsis\n"
-        "2. Insights and anomalies with clinical significance\n"
-        "3. Relevant research citations that support the key insights\n\n"
-        "Format the response with clear sections for Synopsis, Insights and Anomalies, and Citations. "
-        "For citations, include recent peer-reviewed research that supports the clinical insights provided."
-    )
-
-    # Upload files to OpenAI
-    uploaded_files = []
-    image_files = []
-    for file_path in file_paths:
-        with open(file_path, "rb") as f:
-            is_image = file_path.endswith(('.png', '.jpg', '.jpeg'))
-            upload_response = openai.files.create(
-                purpose="vision" if is_image else "assistants",
-                file=f
-            )
-            if is_image:
-                image_files.append(upload_response.id)
+def analyze_health_records(file_paths: List[str], config=None) -> Dict:
+    """Process and analyze health records with PII scrubbing"""
+    logger.info(f"Starting analysis of {len(file_paths)} files")
+    
+    # First, preprocess files to remove PII
+    processed_files = []
+    scrubber = PIIScrubber(config)
+    
+    # Process files with progress bar
+    for file_path in tqdm(file_paths, desc="Processing files", unit="file"):
+        try:
+            processed_file = scrubber.redact_pii(file_path)
+            if processed_file:
+                processed_files.append((file_path, processed_file))
             else:
-                uploaded_files.append({"id": upload_response.id, "type": "file_search"})
+                logger.error(f"Failed to process {file_path}")
+        except Exception as e:
+            logger.error(f"Error processing {file_path}: {e}")
+            continue
     
-    print(f"Uploaded files: {uploaded_files}, Image Files: {image_files}")
+    if not processed_files:
+        return {
+            'success': False,
+            'error': 'No files were successfully processed'
+        }
 
-    # Create a new thread
-    thread = openai.beta.threads.create()
-
-    # Attach PDFs with correct tools (file_search)
-    attachments = [{"file_id": file["id"], "tools": [{"type": "file_search"}]} for file in uploaded_files]
-
-    # Create a message (text + images directly in content)
-    message_content = [
-        {"type": "text", "text": prompt}
-    ]
-
-    # Add images to message content
-    for img_id in image_files:
-        message_content.append({"type": "image_file", "image_file": {"file_id": img_id}})
-
-    # Add user message
-    openai.beta.threads.messages.create(
-        thread_id=thread.id,
-        role="user",
-        content=message_content,
-        attachments=attachments
-    )
-
-    # Run the assistant
-    assistant_id = "asst_1pBzntEcrVPWsbztmDtG9Hap"
-    run = openai.beta.threads.runs.create(
-        thread_id=thread.id,
-        assistant_id=assistant_id
-    )
-
-    # Poll for the assistant's response
-    while True:
-        run_status = openai.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-        if run_status.status == "completed":
-            break
-        print("Waiting for response...")
-        time.sleep(5)
-
-    # Retrieve the final analysis result
-    messages = openai.beta.threads.messages.list(thread_id=thread.id)
+    # Upload processed files to OpenAI
+    image_files = []
     
-    if messages.data:
-        latest_message = messages.data[0].content
-        print("\nAnalysis Result:\n", latest_message)
-        
-        # Extract text content from TextContentBlock
-        if isinstance(latest_message, list):
-            try:
-                analysis_text = ' '.join(
-                    block.text.value if hasattr(block, 'text') and hasattr(block.text, 'value')
-                    else str(block)
-                    for block in latest_message
+    for original_path, processed_file in processed_files:
+        try:
+            logger.info(f"Uploading processed file: {processed_file.name}")
+            
+            with io.BytesIO(processed_file.getvalue()) as temp_buffer:
+                temp_buffer.name = processed_file.name  # Ensure name is set
+                upload_response = client.files.create(
+                    file=temp_buffer,
+                    purpose="assistants"
                 )
-            except AttributeError:
-                analysis_text = str(latest_message)
+            
+            image_files.append(upload_response.id)
+            logger.info(f"Successfully uploaded file with ID: {upload_response.id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to upload processed version of {original_path}: {e}")
+            continue
+
+    if not image_files:
+        return {
+            'success': False,
+            'error': 'No files were successfully uploaded to OpenAI'
+        }
+
+    # Create and process the analysis request
+    try:
+        # Create thread
+        thread = client.beta.threads.create()
+        
+        # Prepare prompt
+        prompt = (
+            "Analyze these health records and provide: \n"
+            "1. A detailed synopsis\n"
+            "2. Insights and anomalies with clinical significance\n"
+            "3. Relevant research citations that support the key insights\n\n"
+            "Format the response with clear sections for Synopsis, Insights and Anomalies, and Citations. "
+            "For citations, include recent peer-reviewed research that supports the clinical insights provided. "
+            "Do not use markdown formatting (no asterisks or other special characters). "
+            "Do not include any patient names, doctor names, or dates in your response. "
+            "Refer to the patient as 'the patient' rather than by name. "
+        )
+        if len(file_paths) > 1:
+            prompt += "Include cross-document insights."
+
+        # Create message content with text and file references
+        message_content = [
+            {
+                "type": "text",
+                "text": prompt
+            }
+        ]
+        
+        # Add files as image_file content
+        for file_id in image_files:
+            message_content.append({
+                "type": "image_file",
+                "image_file": {
+                    "file_id": file_id
+                }
+            })
+
+        # Send message
+        client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=message_content
+        )
+
+        # Run analysis
+        run = client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id="asst_1pBzntEcrVPWsbztmDtG9Hap"
+        )
+
+        # Wait for completion
+        start_time = time.time()
+        timeout = 300  # 5 minutes timeout
+        
+        while True:
+            if time.time() - start_time > timeout:
+                raise TimeoutError("Analysis timed out after 5 minutes")
+                
+            run_status = client.beta.threads.runs.retrieve(
+                thread_id=thread.id,
+                run_id=run.id
+            )
+            
+            if run_status.status == "completed":
+                break
+            elif run_status.status == "failed":
+                raise Exception(f"Analysis failed: {run_status.last_error}")
+                
+            logger.info("Waiting for response...")
+            time.sleep(5)
+
+        # Get results
+        messages = client.beta.threads.messages.list(thread_id=thread.id)
+        
+        if not messages.data:
+            return {
+                'success': False,
+                'error': 'No response received from OpenAI'
+            }
+
+        # Extract content
+        latest_message = messages.data[0].content
+        if isinstance(latest_message, list):
+            analysis_text = ' '.join(
+                block.text.value if hasattr(block, 'text') and hasattr(block.text, 'value')
+                else str(block)
+                for block in latest_message
+            )
         else:
             analysis_text = str(latest_message)
-            
-        print("Extracted analysis text:", analysis_text)
 
-        # Parse the analysis into sections
+        # Extract sections
         synopsis = extract_section(analysis_text, "Synopsis")
         insights_anomalies = extract_section(analysis_text, "Insights and Anomalies")
         citations = extract_section(analysis_text, "Citations")
 
-        # Create the response structure
-        analysis_result = {
+        return {
             'success': True,
             'result': {
                 'synopsis': synopsis,
                 'insights_anomalies': insights_anomalies,
                 'citations': citations,
-                'raw_text': analysis_text  # Include raw text as fallback
+                'raw_text': analysis_text
             }
         }
-        return analysis_result
-    else:
+
+    except Exception as e:
+        error_msg = f"Error in analysis: {str(e)}"
+        logger.error(error_msg)
+        if "rate_limit" in str(e).lower():
+            error_msg = "Rate limit exceeded. Please try again in a few minutes."
+        elif "authentication" in str(e).lower():
+            error_msg = "Authentication error. Please check your API key."
+        elif "permission" in str(e).lower():
+            error_msg = "Permission denied. Please check your API access settings."
         return {
             'success': False,
-            'error': 'No response received.'
+            'error': error_msg
         }
-
-if __name__ == "__main__":
-    file_paths = [
-        "Medications.png",
-        "Heme_Profile.pdf"
-    ]  
-    result = analyze_health_records(file_paths)
-    print("\nFinal Output:\n", result)
