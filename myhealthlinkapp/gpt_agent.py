@@ -13,6 +13,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 import time
 from openai import OpenAI
+import deepl
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 # additional installations needed, NLP and OCR 
 # brew install tesseract
@@ -24,7 +26,7 @@ client = OpenAI(
     api_key="EnterKey",
     organization="EnterKey"
 )
-
+translation_api_key="EnterDeepLKey"
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -186,6 +188,32 @@ class PIIScrubber:
             logger.error(f"Error processing {file_path}: {e}")
             raise
 
+class MedicalTranslator:
+    def __init__(self, api_key):
+        self.translator = deepl.Translator(api_key)
+        
+    def translate(self, text: str, target_lang: str) -> str:
+        try:
+            # Map our language names to DeepL codes
+            lang_map = {
+                'spanish': 'ES',
+                'french': 'FR',
+                'german': 'DE',
+                'italian': 'IT',
+                'japanese': 'JA',
+                'chinese': 'ZH'
+            }
+            
+            target_lang_code = lang_map.get(target_lang.lower())
+            if not target_lang_code:
+                raise ValueError(f"Unsupported language: {target_lang}")
+                
+            result = self.translator.translate_text(text, target_lang=target_lang_code)
+            return result.text
+        except Exception as e:
+            logger.error(f"Translation error: {str(e)}")
+            return text  # Return original text if translation fails
+
 def extract_section(text: str, section_name: str) -> str:
     """Extract specific sections from the analysis text"""
     try:
@@ -256,8 +284,22 @@ def extract_section(text: str, section_name: str) -> str:
         logger.error(f"Error extracting {section_name}: {e}")
         return f"Error processing {section_name.lower()} section"
 
-def analyze_health_records(file_paths: List[str], config=None) -> Dict:
-    """Process and analyze health records with PII scrubbing"""
+# Add this helper function for retrying file uploads
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def upload_file_with_retry(client, file_buffer):
+    """Upload a file to OpenAI with retry logic"""
+    try:
+        response = client.files.create(
+            file=file_buffer,
+            purpose="assistants"
+        )
+        return response
+    except Exception as e:
+        logger.error(f"File upload attempt failed: {str(e)}")
+        raise
+
+def analyze_health_records(file_paths: List[str], target_language: str = None, config=None) -> Dict:
+    """Process and analyze health records with PII scrubbing and optional translation"""
     logger.info(f"Starting analysis of {len(file_paths)} files")
     
     # First, preprocess files to remove PII
@@ -282,7 +324,7 @@ def analyze_health_records(file_paths: List[str], config=None) -> Dict:
             'error': 'No files were successfully processed'
         }
 
-    # Upload processed files to OpenAI
+    # Upload processed files to OpenAI with retry logic
     image_files = []
     
     for original_path, processed_file in processed_files:
@@ -290,14 +332,15 @@ def analyze_health_records(file_paths: List[str], config=None) -> Dict:
             logger.info(f"Uploading processed file: {processed_file.name}")
             
             with io.BytesIO(processed_file.getvalue()) as temp_buffer:
-                temp_buffer.name = processed_file.name  # Ensure name is set
-                upload_response = client.files.create(
-                    file=temp_buffer,
-                    purpose="assistants"
-                )
+                temp_buffer.name = processed_file.name
+                # Use retry logic for file upload
+                upload_response = upload_file_with_retry(client, temp_buffer)
             
             image_files.append(upload_response.id)
             logger.info(f"Successfully uploaded file with ID: {upload_response.id}")
+            
+            # Add a small delay between file uploads
+            time.sleep(2)
                 
         except Exception as e:
             logger.error(f"Failed to upload processed version of {original_path}: {e}")
@@ -314,20 +357,20 @@ def analyze_health_records(file_paths: List[str], config=None) -> Dict:
         # Create thread
         thread = client.beta.threads.create()
         
-        # Prepare prompt
+        # Prepare prompt with multi-file context
         prompt = (
             "Analyze these health records and provide: \n"
             "1. A detailed synopsis\n"
             "2. Insights and anomalies with clinical significance\n"
             "3. Relevant research citations that support the key insights\n\n"
-            "Format the response with clear sections for Synopsis, Insights and Anomalies, and Citations. "
-            "For citations, include recent peer-reviewed research that supports the clinical insights provided. "
-            "Do not use markdown formatting (no asterisks or other special characters). "
-            "Do not include any patient names, doctor names, or dates in your response. "
-            "Refer to the patient as 'the patient' rather than by name. "
         )
+        
         if len(file_paths) > 1:
-            prompt += "Include cross-document insights."
+            prompt += (
+                "These documents are related and should be analyzed together. "
+                "Please provide a comprehensive analysis that considers all documents "
+                "and highlights any relationships or patterns between them. "
+            )
 
         # Create message content with text and file references
         message_content = [
@@ -337,7 +380,7 @@ def analyze_health_records(file_paths: List[str], config=None) -> Dict:
             }
         ]
         
-        # Add files as image_file content
+        # Add files as image_file content with delay between each
         for file_id in image_files:
             message_content.append({
                 "type": "image_file",
@@ -345,6 +388,7 @@ def analyze_health_records(file_paths: List[str], config=None) -> Dict:
                     "file_id": file_id
                 }
             })
+            time.sleep(1)  # Small delay between adding files
 
         # Send message
         client.beta.threads.messages.create(
@@ -353,19 +397,19 @@ def analyze_health_records(file_paths: List[str], config=None) -> Dict:
             content=message_content
         )
 
-        # Run analysis
+        # Run analysis with increased timeout
         run = client.beta.threads.runs.create(
             thread_id=thread.id,
             assistant_id="asst_1pBzntEcrVPWsbztmDtG9Hap"
         )
 
-        # Wait for completion
+        # Wait for completion with longer timeout
         start_time = time.time()
-        timeout = 300  # 5 minutes timeout
+        timeout = 600  # 10 minutes timeout for multiple files
         
         while True:
             if time.time() - start_time > timeout:
-                raise TimeoutError("Analysis timed out after 5 minutes")
+                raise TimeoutError("Analysis timed out after 10 minutes")
                 
             run_status = client.beta.threads.runs.retrieve(
                 thread_id=thread.id,
@@ -405,7 +449,8 @@ def analyze_health_records(file_paths: List[str], config=None) -> Dict:
         insights_anomalies = extract_section(analysis_text, "Insights and Anomalies")
         citations = extract_section(analysis_text, "Citations")
 
-        return {
+        # Get the analysis results first
+        analysis_result = {
             'success': True,
             'result': {
                 'synopsis': synopsis,
@@ -414,6 +459,34 @@ def analyze_health_records(file_paths: List[str], config=None) -> Dict:
                 'raw_text': analysis_text
             }
         }
+
+        # Only attempt translation if we have successful analysis AND a target language
+        if analysis_result['success'] and target_language and target_language != "":
+            try:
+                translator = MedicalTranslator(api_key=translation_api_key)
+                
+                # Translate each section
+                analysis_result['result']['synopsis'] = translator.translate(
+                    analysis_result['result']['synopsis'], 
+                    target_language
+                )
+                analysis_result['result']['insights_anomalies'] = translator.translate(
+                    analysis_result['result']['insights_anomalies'], 
+                    target_language
+                )
+                analysis_result['result']['citations'] = translator.translate(
+                    analysis_result['result']['citations'], 
+                    target_language
+                )
+                
+                logger.info(f"Successfully translated analysis to {target_language}")
+                
+            except Exception as e:
+                logger.error(f"Translation failed: {str(e)}")
+                # Continue with original text if translation fails
+                pass
+
+        return analysis_result
 
     except Exception as e:
         error_msg = f"Error in analysis: {str(e)}"
