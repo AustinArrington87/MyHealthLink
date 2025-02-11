@@ -28,6 +28,23 @@
         </div>
     </div>
 
+    <div class="bg-white shadow-md rounded-lg p-6 mb-6">
+        <h2 class="text-xl font-semibold mb-4">Language Settings</h2>
+        <div class="flex items-center">
+            <label for="target_language" class="mr-3 text-gray-700">Select Analysis Language:</label>
+            <select name="target_language" id="target_language" 
+                    class="border rounded-md py-2 px-3 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">Original (English)</option>
+                <option value="spanish">Spanish</option>
+                <option value="french">French</option>
+                <option value="german">German</option>
+                <option value="italian">Italian</option>
+                <option value="japanese">Japanese</option>
+                <option value="chinese">Chinese</option>
+            </select>
+        </div>
+    </div>
+
     <div id="analysisResult" class="bg-white shadow-md rounded-lg p-6 mb-6 hidden">
         <h2 class="text-xl font-semibold mb-4">Analysis Results</h2>
         <div class="space-y-6">
@@ -126,6 +143,10 @@
         for (const file of files) {
             formData.append('files[]', file);
         }
+        
+        // Add selected language to form data
+        const targetLanguage = document.getElementById('target_language').value;
+        formData.append('target_language', targetLanguage);
 
         // Show loading state
         const loadingState = document.getElementById('loadingState');
