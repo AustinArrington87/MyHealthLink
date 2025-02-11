@@ -42,6 +42,7 @@ def upload_file():
         return jsonify({'success': False, 'error': 'No file part'}), 400
     
     files = request.files.getlist('files[]')
+    target_language = request.form.get('target_language')  # Get requested language
     file_paths = []
     
     try:
@@ -56,8 +57,11 @@ def upload_file():
         
         if file_paths:
             try:
-                # Use the default configuration when calling analyze_health_records
-                analysis_result = analyze_health_records(file_paths, config=default_config)
+                # Pass target language to analysis function
+                analysis_result = analyze_health_records(
+                    file_paths,
+                    target_language=target_language
+                )
                 
                 if analysis_result.get('success'):
                     result = analysis_result.get('result', {})
@@ -65,16 +69,10 @@ def upload_file():
                         'timestamp': datetime.now().isoformat(),
                         'synopsis': result.get('synopsis', 'No synopsis available'),
                         'insights_anomalies': result.get('insights_anomalies', 'No insights available'),
-                        'citations': result.get('citations', 'No citations available')
+                        'citations': result.get('citations', 'No citations available'),
+                        'target_language': target_language
                     }
-                    return jsonify({
-                        'success': True,
-                        'result': {
-                            'synopsis': result.get('synopsis', 'No synopsis available'),
-                            'insights_anomalies': result.get('insights_anomalies', 'No insights available'),
-                            'citations': result.get('citations', 'No citations available')
-                        }
-                    })
+                    return jsonify(analysis_result)
                 else:
                     raise Exception(analysis_result.get('error', 'Analysis failed'))
 
