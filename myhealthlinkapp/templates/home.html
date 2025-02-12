@@ -10,12 +10,27 @@
                  alt="MyHealthLink Logo" 
                  class="h-8 drop-shadow-md hover:drop-shadow-lg transition-all duration-300">
         </a>
-        <a href="{{ url_for('profile') }}" class="text-gray-600 hover:text-gray-900 transition-colors duration-200">Profile</a>
+        <div class="flex items-center gap-6">
+            <div class="flex items-center">
+                <label for="target_language" class="mr-2 text-sm text-gray-600">Language:</label>
+                <select name="target_language" id="target_language" 
+                        class="text-sm border rounded-md py-1 px-2 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">English</option>
+                    <option value="spanish">Spanish</option>
+                    <option value="french">French</option>
+                    <option value="german">German</option>
+                    <option value="italian">Italian</option>
+                    <option value="japanese">Japanese</option>
+                    <option value="chinese">Chinese</option>
+                </select>
+            </div>
+            <a href="{{ url_for('profile') }}" class="text-gray-600 hover:text-gray-900 transition-colors duration-200">Profile</a>
+        </div>
     </div>
 </div>
 
 <div class="max-w-4xl mx-auto mt-20">
-    <h1 class="text-3xl font-bold mb-8">Welcome, Michelle G</h1>
+    <h1 class="text-3xl font-bold mb-8">Welcome, {{ user_name }}</h1>
     
     <div class="bg-white shadow-md rounded-lg p-6 mb-6">
         <h2 class="text-xl font-semibold mb-4">Analyze Health Record</h2>
@@ -25,23 +40,6 @@
                 + Add Document
             </button>
             <p class="text-gray-500 mt-2">or drag and drop files here</p>
-        </div>
-    </div>
-
-    <div class="bg-white shadow-md rounded-lg p-6 mb-6">
-        <h2 class="text-xl font-semibold mb-4">Language Settings</h2>
-        <div class="flex items-center">
-            <label for="target_language" class="mr-3 text-gray-700">Select Analysis Language:</label>
-            <select name="target_language" id="target_language" 
-                    class="border rounded-md py-2 px-3 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">Original (English)</option>
-                <option value="spanish">Spanish</option>
-                <option value="french">French</option>
-                <option value="german">German</option>
-                <option value="italian">Italian</option>
-                <option value="japanese">Japanese</option>
-                <option value="chinese">Chinese</option>
-            </select>
         </div>
     </div>
 
