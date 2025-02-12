@@ -26,7 +26,7 @@ client = OpenAI(
     api_key="EnterKey",
     organization="EnterKey"
 )
-translation_api_key="EnterDeepLKey"
+translation_api_key="EnterKey"
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -220,21 +220,20 @@ def extract_section(text: str, section_name: str) -> str:
         # Section markers
         markers = {
             "Synopsis": [
-                "### Synopsis", "## Synopsis", "Synopsis:", "Summary:", 
-                "### Summary:", "## Summary", "### Overview:", "## Overview",
-                "Overview:", "Analysis:", "### Analysis:", "## Analysis"
+                "### Synopsis",
+                "## Synopsis",
+                "Synopsis:",
             ],
             "Insights and Anomalies": [
-                "### Insights and Anomalies", "## Insights and Anomalies",
-                "Insights and Anomalies:", "### Insights:", "## Insights",
-                "Insights or Anomalies:", "**Insights and Anomalies:**",
-                "## Insights and Anomalies", "**Insights or Anomalies:**"
+                "### Insights and Anomalies",
+                "## Insights and Anomalies",
+                "Insights and Anomalies:",
             ],
             "Citations": [
-                "### Citations", "## Citations", "Citations:", 
-                "References:", "### References:", "## References",
-                "Research Citations:", "### Research Citations:",
-                "**Citations:**"
+                "### Research Citations",
+                "### Citations",
+                "## Citations",
+                "Citations:",
             ]
         }
         
@@ -263,22 +262,33 @@ def extract_section(text: str, section_name: str) -> str:
                 section_text = text[start:end].strip()
                 break
         
-        # Clean markdown and other formatting
         if section_text:
-            # Remove markdown formatting
-            section_text = re.sub(r'\*\*(.+?)\*\*', r'\1', section_text)  # Bold
-            section_text = re.sub(r'\*(.+?)\*', r'\1', section_text)      # Italic
-            section_text = re.sub(r'_(.+?)_', r'\1', section_text)        # Underscore
-            section_text = re.sub(r'`(.+?)`', r'\1', section_text)        # Code
-            # Remove multiple newlines
+            # Clean up formatting while preserving structure
+            section_text = re.sub(r'\*\*|\*|`|_', '', section_text)  # Remove markdown
+            
+            # Only redact PII in Synopsis section
+            if section_name == "Synopsis":
+                pii_patterns = [
+                    r'(?i)(?:Name|Patient):?\s*[A-Z][a-z]+\s+[A-Z][a-z]+',
+                    r'(?i)DOB:?\s*\d{1,2}[-/]\d{1,2}[-/]\d{2,4}',
+                    r'(?i)(?:Dr\.|Doctor|Provider|Physician|PCP)\s*[A-Z][a-z]+\s+[A-Z][a-z]+',
+                    r'(?i)MRN:?\s*\d{5,}',
+                ]
+                
+                for pattern in pii_patterns:
+                    section_text = re.sub(pattern, '[REDACTED]', section_text)
+            
+            # Preserve bullet points and numbering
+            section_text = re.sub(r'(?m)^(\d+\.\s+)', '• ', section_text)  # Convert numbers to bullets
+            section_text = re.sub(r'(?m)^[-•]\s+', '• ', section_text)     # Standardize bullets
+            
+            # Clean up extra whitespace while preserving line breaks
             section_text = re.sub(r'\n\s*\n', '\n', section_text)
-            # Remove leading/trailing whitespace
-            section_text = section_text.strip()
+            section_text = re.sub(r'[ \t]+', ' ', section_text)
+            
+            return section_text.strip()
         
-        if not section_text:
-            return f"No {section_name.lower()} available."
-        
-        return section_text
+        return f"No {section_name.lower()} available."
         
     except Exception as e:
         logger.error(f"Error extracting {section_name}: {e}")
@@ -298,81 +308,81 @@ def upload_file_with_retry(client, file_buffer):
         logger.error(f"File upload attempt failed: {str(e)}")
         raise
 
-def analyze_health_records(file_paths: List[str], target_language: str = None, config=None) -> Dict:
-    """Process and analyze health records with PII scrubbing and optional translation"""
-    logger.info(f"Starting analysis of {len(file_paths)} files")
-    
-    # First, preprocess files to remove PII
-    processed_files = []
-    scrubber = PIIScrubber(config)
-    
-    # Process files with progress bar
-    for file_path in tqdm(file_paths, desc="Processing files", unit="file"):
-        try:
-            processed_file = scrubber.redact_pii(file_path)
-            if processed_file:
-                processed_files.append((file_path, processed_file))
-            else:
-                logger.error(f"Failed to process {file_path}")
-        except Exception as e:
-            logger.error(f"Error processing {file_path}: {e}")
-            continue
-    
-    if not processed_files:
-        return {
-            'success': False,
-            'error': 'No files were successfully processed'
-        }
-
-    # Upload processed files to OpenAI with retry logic
-    image_files = []
-    
-    for original_path, processed_file in processed_files:
-        try:
-            logger.info(f"Uploading processed file: {processed_file.name}")
-            
-            with io.BytesIO(processed_file.getvalue()) as temp_buffer:
-                temp_buffer.name = processed_file.name
-                # Use retry logic for file upload
-                upload_response = upload_file_with_retry(client, temp_buffer)
-            
-            image_files.append(upload_response.id)
-            logger.info(f"Successfully uploaded file with ID: {upload_response.id}")
-            
-            # Add a small delay between file uploads
-            time.sleep(2)
-                
-        except Exception as e:
-            logger.error(f"Failed to upload processed version of {original_path}: {e}")
-            continue
-
-    if not image_files:
-        return {
-            'success': False,
-            'error': 'No files were successfully uploaded to OpenAI'
-        }
-
-    # Create and process the analysis request
+def analyze_health_records(file_paths: List[str], target_language: str = None) -> Dict:
+    """Analyze health records and return insights"""
     try:
-        # Create thread
-        thread = client.beta.threads.create()
+        logger.info(f"Starting analysis of {len(file_paths)} files")
         
-        # Prepare prompt with multi-file context
-        prompt = (
-            "Analyze these health records and provide: \n"
-            "1. A detailed synopsis\n"
-            "2. Insights and anomalies with clinical significance\n"
-            "3. Relevant research citations that support the key insights\n\n"
-        )
+        # First, preprocess files to remove PII
+        processed_files = []
+        scrubber = PIIScrubber()
         
-        if len(file_paths) > 1:
-            prompt += (
-                "These documents are related and should be analyzed together. "
-                "Please provide a comprehensive analysis that considers all documents "
-                "and highlights any relationships or patterns between them. "
-            )
+        # Process files with progress bar
+        for file_path in tqdm(file_paths, desc="Processing files", unit="file"):
+            try:
+                processed_file = scrubber.redact_pii(file_path)
+                if processed_file:
+                    processed_files.append((file_path, processed_file))
+                else:
+                    logger.error(f"Failed to process {file_path}")
+            except Exception as e:
+                logger.error(f"Error processing {file_path}: {e}")
+                continue
+        
+        if not processed_files:
+            return {
+                'success': False,
+                'error': 'No files were successfully processed'
+            }
 
-        # Create message content with text and file references
+        # Upload processed files to OpenAI with retry logic
+        image_files = []
+        
+        for original_path, processed_file in processed_files:
+            try:
+                logger.info(f"Uploading processed file: {processed_file.name}")
+                
+                with io.BytesIO(processed_file.getvalue()) as temp_buffer:
+                    temp_buffer.name = processed_file.name
+                    # Use retry logic for file upload
+                    upload_response = upload_file_with_retry(client, temp_buffer)
+                
+                image_files.append(upload_response.id)
+                logger.info(f"Successfully uploaded file with ID: {upload_response.id}")
+                
+                # Add a small delay between file uploads
+                time.sleep(2)
+                
+            except Exception as e:
+                logger.error(f"Failed to upload processed version of {original_path}: {e}")
+                continue
+
+        if not image_files:
+            return {
+                'success': False,
+                'error': 'No files were successfully uploaded to OpenAI'
+            }
+
+        # Update the prompt for better structured output
+        prompt = """Analyze these health records and provide a structured analysis with these specific sections:
+
+### Synopsis
+Provide a clear, bulleted list of all test results and their reference ranges. Format as:
+• Test Name: Value (Reference Range)
+
+### Insights and Anomalies
+Provide a clear analysis of any abnormal values and their clinical significance. Format as:
+• Key Finding 1: Clinical significance and supporting context
+• Key Finding 2: Clinical significance and supporting context
+
+### Research Citations
+Provide 2-3 specific, relevant peer-reviewed citations that support the clinical insights above. Format as:
+1. Author(s) (Year). "Title". Journal Name, Volume(Issue), Pages.
+   - Brief description of relevance to findings
+
+Do not include recommendations or treatment suggestions. Focus only on test interpretation and supporting evidence."""
+
+        # Create message content
         message_content = [
             {
                 "type": "text",
@@ -380,7 +390,7 @@ def analyze_health_records(file_paths: List[str], target_language: str = None, c
             }
         ]
         
-        # Add files as image_file content with delay between each
+        # Add files as image_file content
         for file_id in image_files:
             message_content.append({
                 "type": "image_file",
@@ -388,115 +398,127 @@ def analyze_health_records(file_paths: List[str], target_language: str = None, c
                     "file_id": file_id
                 }
             })
-            time.sleep(1)  # Small delay between adding files
-
-        # Send message
-        client.beta.threads.messages.create(
-            thread_id=thread.id,
-            role="user",
-            content=message_content
-        )
-
-        # Run analysis with increased timeout
-        run = client.beta.threads.runs.create(
-            thread_id=thread.id,
-            assistant_id="asst_1pBzntEcrVPWsbztmDtG9Hap"
-        )
-
-        # Wait for completion with longer timeout
-        start_time = time.time()
-        timeout = 600  # 10 minutes timeout for multiple files
         
-        while True:
-            if time.time() - start_time > timeout:
-                raise TimeoutError("Analysis timed out after 10 minutes")
-                
-            run_status = client.beta.threads.runs.retrieve(
-                thread_id=thread.id,
-                run_id=run.id
-            )
+        # Create and process the analysis request
+        try:
+            # Create thread
+            thread = client.beta.threads.create()
             
-            if run_status.status == "completed":
-                break
-            elif run_status.status == "failed":
-                raise Exception(f"Analysis failed: {run_status.last_error}")
-                
-            logger.info("Waiting for response...")
-            time.sleep(5)
+            # Send message
+            client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=message_content
+            )
 
-        # Get results
-        messages = client.beta.threads.messages.list(thread_id=thread.id)
-        
-        if not messages.data:
+            # Run analysis with increased timeout
+            run = client.beta.threads.runs.create(
+                thread_id=thread.id,
+                assistant_id="asst_1pBzntEcrVPWsbztmDtG9Hap"
+            )
+
+            # Wait for completion with longer timeout
+            start_time = time.time()
+            timeout = 600  # 10 minutes timeout for multiple files
+            
+            while True:
+                if time.time() - start_time > timeout:
+                    raise TimeoutError("Analysis timed out after 10 minutes")
+                    
+                run_status = client.beta.threads.runs.retrieve(
+                    thread_id=thread.id,
+                    run_id=run.id
+                )
+                
+                if run_status.status == "completed":
+                    break
+                elif run_status.status == "failed":
+                    raise Exception(f"Analysis failed: {run_status.last_error}")
+                    
+                logger.info("Waiting for response...")
+                time.sleep(5)
+
+            # Get results
+            messages = client.beta.threads.messages.list(thread_id=thread.id)
+            
+            if not messages.data:
+                return {
+                    'success': False,
+                    'error': 'No response received from OpenAI'
+                }
+
+            # Extract content
+            latest_message = messages.data[0].content
+            if isinstance(latest_message, list):
+                analysis_text = ' '.join(
+                    block.text.value if hasattr(block, 'text') and hasattr(block.text, 'value')
+                    else str(block)
+                    for block in latest_message
+                )
+            else:
+                analysis_text = str(latest_message)
+
+            # Extract sections
+            synopsis = extract_section(analysis_text, "Synopsis")
+            insights_anomalies = extract_section(analysis_text, "Insights and Anomalies")
+            citations = extract_section(analysis_text, "Citations")
+
+            # Get the analysis results first
+            analysis_result = {
+                'success': True,
+                'result': {
+                    'synopsis': synopsis,
+                    'insights_anomalies': insights_anomalies,
+                    'citations': citations,
+                    'raw_text': analysis_text
+                }
+            }
+
+            # Only attempt translation if we have successful analysis AND a target language
+            if analysis_result['success'] and target_language and target_language.lower() != "english":
+                try:
+                    translator = MedicalTranslator(api_key=translation_api_key)
+                    
+                    # Translate each section
+                    analysis_result['result']['synopsis'] = translator.translate(
+                        analysis_result['result']['synopsis'], 
+                        target_language
+                    )
+                    analysis_result['result']['insights_anomalies'] = translator.translate(
+                        analysis_result['result']['insights_anomalies'], 
+                        target_language
+                    )
+                    analysis_result['result']['citations'] = translator.translate(
+                        analysis_result['result']['citations'], 
+                        target_language
+                    )
+                    
+                    logger.info(f"Successfully translated analysis to {target_language}")
+                    
+                except Exception as e:
+                    logger.error(f"Translation failed: {str(e)}")
+                    # Continue with original text if translation fails
+                    pass
+
+            return analysis_result
+
+        except Exception as e:
+            error_msg = f"Error in analysis: {str(e)}"
+            logger.error(error_msg)
+            if "rate_limit" in str(e).lower():
+                error_msg = "Rate limit exceeded. Please try again in a few minutes."
+            elif "authentication" in str(e).lower():
+                error_msg = "Authentication error. Please check your API key."
+            elif "permission" in str(e).lower():
+                error_msg = "Permission denied. Please check your API access settings."
             return {
                 'success': False,
-                'error': 'No response received from OpenAI'
+                'error': error_msg
             }
-
-        # Extract content
-        latest_message = messages.data[0].content
-        if isinstance(latest_message, list):
-            analysis_text = ' '.join(
-                block.text.value if hasattr(block, 'text') and hasattr(block.text, 'value')
-                else str(block)
-                for block in latest_message
-            )
-        else:
-            analysis_text = str(latest_message)
-
-        # Extract sections
-        synopsis = extract_section(analysis_text, "Synopsis")
-        insights_anomalies = extract_section(analysis_text, "Insights and Anomalies")
-        citations = extract_section(analysis_text, "Citations")
-
-        # Get the analysis results first
-        analysis_result = {
-            'success': True,
-            'result': {
-                'synopsis': synopsis,
-                'insights_anomalies': insights_anomalies,
-                'citations': citations,
-                'raw_text': analysis_text
-            }
-        }
-
-        # Only attempt translation if we have successful analysis AND a target language
-        if analysis_result['success'] and target_language and target_language != "":
-            try:
-                translator = MedicalTranslator(api_key=translation_api_key)
-                
-                # Translate each section
-                analysis_result['result']['synopsis'] = translator.translate(
-                    analysis_result['result']['synopsis'], 
-                    target_language
-                )
-                analysis_result['result']['insights_anomalies'] = translator.translate(
-                    analysis_result['result']['insights_anomalies'], 
-                    target_language
-                )
-                analysis_result['result']['citations'] = translator.translate(
-                    analysis_result['result']['citations'], 
-                    target_language
-                )
-                
-                logger.info(f"Successfully translated analysis to {target_language}")
-                
-            except Exception as e:
-                logger.error(f"Translation failed: {str(e)}")
-                # Continue with original text if translation fails
-                pass
-
-        return analysis_result
 
     except Exception as e:
-        error_msg = f"Error in analysis: {str(e)}"
+        error_msg = f"Error in analyze_health_records: {str(e)}"
         logger.error(error_msg)
-        if "rate_limit" in str(e).lower():
-            error_msg = "Rate limit exceeded. Please try again in a few minutes."
-        elif "authentication" in str(e).lower():
-            error_msg = "Authentication error. Please check your API key."
-        elif "permission" in str(e).lower():
-            error_msg = "Permission denied. Please check your API access settings."
         return {
             'success': False,
             'error': error_msg
