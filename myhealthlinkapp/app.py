@@ -34,7 +34,9 @@ def allowed_file(filename):
 
 @app.route('/')
 def home():
-    return render_template('home.html')
+    # Get user name from session, default to "Guest" if not found
+    user_name = session.get('user_name', 'Guest')
+    return render_template('home.html', user_name=user_name)
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -100,9 +102,13 @@ def upload_file():
 
 @app.route('/profile')
 def profile():
+    # Get user name from session or use default
+    user_name = session.get('user_name', 'Michelle G')
+    first_name, last_name = user_name.split(' ', 1) if ' ' in user_name else (user_name, '')
+    
     # Mock data for demonstration
     user_data = {
-        'name': 'Michelle G',
+        'name': {'first': first_name, 'last': last_name},
         'vitals': {
             'blood_pressure': '120/80',
             'pulse_rate': '72',
@@ -113,6 +119,22 @@ def profile():
         }
     }
     return render_template('profile.html', user=user_data)
+
+@app.route('/update_profile', methods=['POST'])
+def update_profile():
+    try:
+        data = request.json
+        first_name = data.get('first_name', '').strip()
+        last_name = data.get('last_name', '').strip()
+        
+        # Combine names and store in session
+        full_name = f"{first_name} {last_name}".strip()
+        session['user_name'] = full_name
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Profile update error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/export-pdf', methods=['POST'])
 def export_pdf():
