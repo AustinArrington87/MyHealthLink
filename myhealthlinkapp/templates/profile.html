@@ -22,11 +22,11 @@
         <div class="grid grid-cols-2 gap-4">
             <div>
                 <label class="block text-gray-700 text-sm font-bold mb-2">First Name</label>
-                <input type="text" value="{{ user.name.split()[0] }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <input type="text" id="firstName" value="{{ user.name.first }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
             </div>
             <div>
                 <label class="block text-gray-700 text-sm font-bold mb-2">Last Name</label>
-                <input type="text" value="{{ user.name.split()[1] }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <input type="text" id="lastName" value="{{ user.name.last }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
             </div>
         </div>
     </div>
@@ -55,10 +55,40 @@
         </div>
 
         <div class="mt-6">
-            <button class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+            <button onclick="saveProfile()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
                 Save
             </button>
         </div>
     </div>
 </div>
+
+<script>
+function saveProfile() {
+    const firstName = document.getElementById('firstName').value;
+    const lastName = document.getElementById('lastName').value;
+    
+    fetch('/update_profile', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            first_name: firstName,
+            last_name: lastName
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            window.location.href = '/';
+        } else {
+            throw new Error(data.error || 'Failed to update profile');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to update profile. Please try again.');
+    });
+}
+</script>
 {% endblock %}
