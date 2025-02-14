@@ -37,20 +37,78 @@
         
         <div class="grid grid-cols-2 gap-4">
             <div>
-                <label class="block text-gray-700 text-sm font-bold mb-2">Blood Pressure</label>
-                <input type="text" value="{{ user.vitals.blood_pressure }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <label class="block text-gray-700 text-sm font-bold mb-2">Blood Pressure (mmHg)</label>
+                <div class="flex items-center gap-2">
+                    <div class="w-full">
+                        <input type="number" 
+                               id="bpSystolic" 
+                               value="{{ user.vitals.blood_pressure.split('/')[0] if user.vitals.blood_pressure else '' }}" 
+                               min="50" 
+                               max="300"
+                               placeholder="Systolic"
+                               class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                        <p id="bpSystolicError" class="text-red-500 text-sm mt-1 hidden"></p>
+                    </div>
+                    <span class="text-gray-700">/</span>
+                    <div class="w-full">
+                        <input type="number" 
+                               id="bpDiastolic" 
+                               value="{{ user.vitals.blood_pressure.split('/')[1] if user.vitals.blood_pressure else '' }}"
+                               min="30" 
+                               max="200"
+                               placeholder="Diastolic"
+                               class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                        <p id="bpDiastolicError" class="text-red-500 text-sm mt-1 hidden"></p>
+                    </div>
+                </div>
             </div>
             <div>
                 <label class="block text-gray-700 text-sm font-bold mb-2">BMI</label>
-                <input type="text" value="{{ user.vitals.bmi }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <input type="number" 
+                       id="bmi" 
+                       value="{{ user.vitals.bmi }}" 
+                       min="10" 
+                       max="60"
+                       step="0.1"
+                       class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <p id="bmiError" class="text-red-500 text-sm mt-1 hidden"></p>
             </div>
             <div>
                 <label class="block text-gray-700 text-sm font-bold mb-2">Height</label>
-                <input type="text" value="{{ user.vitals.height }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <div class="flex items-center gap-2">
+                    <div class="w-full">
+                        <input type="number" 
+                               id="heightFeet" 
+                               value="{{ user.vitals.height.split('\'')[0] if user.vitals.height else '' }}"
+                               min="0" 
+                               max="9"
+                               placeholder="Feet"
+                               class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                        <p id="heightFeetError" class="text-red-500 text-sm mt-1 hidden"></p>
+                    </div>
+                    <span class="text-gray-700">ft</span>
+                    <div class="w-full">
+                        <input type="number" 
+                               id="heightInches" 
+                               value="{{ user.vitals.height.split('\'')[1].replace('\"', '') if user.vitals.height else '' }}"
+                               min="0" 
+                               max="11"
+                               placeholder="Inches"
+                               class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                        <p id="heightInchesError" class="text-red-500 text-sm mt-1 hidden"></p>
+                    </div>
+                    <span class="text-gray-700">in</span>
+                </div>
             </div>
             <div>
-                <label class="block text-gray-700 text-sm font-bold mb-2">Weight</label>
-                <input type="text" value="{{ user.vitals.weight }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <label class="block text-gray-700 text-sm font-bold mb-2">Weight (lbs)</label>
+                <input type="number" 
+                       id="weight" 
+                       value="{{ user.vitals.weight }}"
+                       min="0" 
+                       max="1500"
+                       class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <p id="weightError" class="text-red-500 text-sm mt-1 hidden"></p>
             </div>
         </div>
 
@@ -63,9 +121,70 @@
 </div>
 
 <script>
+function clearErrors() {
+    const errorElements = document.querySelectorAll('[id$="Error"]');
+    errorElements.forEach(element => {
+        element.textContent = '';
+        element.classList.add('hidden');
+    });
+}
+
+function showError(elementId, message) {
+    const errorElement = document.getElementById(elementId + 'Error');
+    errorElement.textContent = message;
+    errorElement.classList.remove('hidden');
+}
+
 function saveProfile() {
     const firstName = document.getElementById('firstName').value;
     const lastName = document.getElementById('lastName').value;
+    
+    // Get vitals values
+    const bpSystolic = document.getElementById('bpSystolic').value;
+    const bpDiastolic = document.getElementById('bpDiastolic').value;
+    const bmi = document.getElementById('bmi').value;
+    const heightFeet = document.getElementById('heightFeet').value;
+    const heightInches = document.getElementById('heightInches').value;
+    const weight = document.getElementById('weight').value;
+
+    // Clear previous errors
+    clearErrors();
+
+    // Validate vitals
+    let hasError = false;
+    
+    if (bpSystolic && (bpSystolic < 50 || bpSystolic > 300)) {
+        showError('bpSystolic', 'Systolic blood pressure must be between 50 and 300 mmHg');
+        hasError = true;
+    }
+    if (bpDiastolic && (bpDiastolic < 30 || bpDiastolic > 200)) {
+        showError('bpDiastolic', 'Diastolic blood pressure must be between 30 and 200 mmHg');
+        hasError = true;
+    }
+    if (bmi && (bmi < 10 || bmi > 60)) {
+        showError('bmi', 'BMI must be between 10 and 60');
+        hasError = true;
+    }
+    if (heightFeet && heightFeet > 9) {
+        showError('heightFeet', 'Height cannot exceed 9 feet');
+        hasError = true;
+    }
+    if (heightInches && (heightInches < 0 || heightInches > 11)) {
+        showError('heightInches', 'Inches must be between 0 and 11');
+        hasError = true;
+    }
+    if (weight && weight > 1500) {
+        showError('weight', 'Weight cannot exceed 1500 lbs');
+        hasError = true;
+    }
+
+    if (hasError) {
+        return;
+    }
+
+    // Format values
+    const bloodPressure = bpSystolic && bpDiastolic ? `${bpSystolic}/${bpDiastolic}` : '';
+    const height = heightFeet ? `${heightFeet}'${heightInches || 0}"` : '';
     
     fetch('/update_profile', {
         method: 'POST',
@@ -74,7 +193,13 @@ function saveProfile() {
         },
         body: JSON.stringify({
             first_name: firstName,
-            last_name: lastName
+            last_name: lastName,
+            vitals: {
+                blood_pressure: bloodPressure,
+                bmi: bmi,
+                height: height,
+                weight: weight
+            }
         })
     })
     .then(response => response.json())
